@@ -1,0 +1,3 @@
+[submodule "CEFHook/MologieDetours"]
+	path = CEFHook/MologieDetours
+	url = https://github.com/kimperator/MologieDetours
