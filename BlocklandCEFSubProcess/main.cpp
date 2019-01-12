@@ -15,11 +15,11 @@
 #pragma comment(lib, "libcef.lib")
 #pragma comment(lib, "libcef_dll_wrapper.lib")
 
-class BLBrowser : public CefApp {
+class BLCefApp : public CefApp {
 
 	public:
 
-		BLBrowser() {
+		BLCefApp() {
 			
 		};
 		// CefBrowserProcessHandler methods:
@@ -28,11 +28,11 @@ class BLBrowser : public CefApp {
 	private:
 
 		// Include the default reference counting implementation.
-		IMPLEMENT_REFCOUNTING(BLBrowser);
+		IMPLEMENT_REFCOUNTING(BLCefApp);
 
 };
 
-class SubApp : public BLBrowser, public CefRenderProcessHandler {
+class SubApp : public BLCefApp, public CefRenderProcessHandler {
 	
 	public:
 

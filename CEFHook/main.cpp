@@ -24,12 +24,8 @@
 #pragma comment(lib, "libcef_dll_wrapper.lib")
 
 #define CEFHOOK_VERS_MAJ "0"
-#define CEFHOOK_VERS_MIN "0"
-#define CEFHOOK_VERS_REV "1"
-
-HANDLE thread;
-HANDLE blockland;
-HANDLE event;
+#define CEFHOOK_VERS_MIN "1"
+#define CEFHOOK_VERS_REV "0"
 
 struct TextureObject {
 	TextureObject *next;
@@ -52,20 +48,26 @@ struct TextureObject {
 	int refCount;
 };
 
-CefRefPtr<CefBrowser> BLBrowserInstance;
+CefRefPtr<CefBrowser> BLCefInstance;
 
 typedef int(*swapBuffersFn)();
-static int texID = 0; //Texture ID that we bind to with OpenGL
+static int texID = 0; // Texture ID that we bind to with OpenGL.
+static char* textureFile = "Add-Ons/Print_Screen_Cinema/prints/Cinema.png"; // Default texture file to look for when binding.
 
-static bool dirty = false; //Do we need to render the texture?
+static bool debug = false; // Is debug mode enabled?
+static bool dirty = false; // Do we need to render the texture?
 
-static int global_ww = 1024; //Width
-static int global_hh = 768; //Height, both are used in swapBuffers to determine what should be copied over.
+static int global_ww = 1024; // Width.
+static int global_hh = 768; // Height, both are used in swapBuffers to determine what should be copied over.
 
-MologieDetours::Detour<swapBuffersFn>* swapBuffers_detour; //The detour so we can draw our stuff before Torque can.
 
+MologieDetours::Detour<swapBuffersFn>* swapBuffers_detour;
 GLuint* texBuffer;
 
+HANDLE cefThread;
+HANDLE cefStopEvent;
+
+// The detour so we can draw our stuff before Torque can.
 int __fastcall swapBuffers_hook() {
 	if (texID != 0 && dirty) {
 		BL_glBindTexture(GL_TEXTURE_2D, texID);
@@ -85,11 +87,11 @@ int __fastcall swapBuffers_hook() {
 	return ret;
 }
 
-class BLBrowser : public CefApp {
+class BLCefApp : public CefApp {
 
 	public:
 
-		BLBrowser() {
+		BLCefApp() {
 			
 		};
 		// CefBrowserProcessHandler methods:
@@ -97,32 +99,27 @@ class BLBrowser : public CefApp {
 
 	private:
 		// Include the default reference counting implementation.
-		IMPLEMENT_REFCOUNTING(BLBrowser);
+		IMPLEMENT_REFCOUNTING(BLCefApp);
 
 };
 
-class BLBrowserRenderer : public CefRenderHandler {
+class BLCefRenderer : public CefRenderHandler {
 
 	public:
 
-		BLBrowserRenderer(int w, int h) : height(h), width(w) {
+		BLCefRenderer(int w, int h) : height(h), width(w) {
 			if (!BL_glGenBuffers) {
-				Printf("Could not find genBuffers!");
-
 				if (!BL_glGenBuffersARB) {
-					Printf("Could not find BL_genBuffersArb!");
 					texBuffer = (GLuint*)malloc(2048 * 2048 * 4);
 					memset((void*)texBuffer, 0, 2048 * 2048 * 4);
 				} else {
 					BL_glGenBuffersARB(1, &*texBuffer);
 					BL_glBindBufferARB(GL_TEXTURE_BUFFER, *texBuffer);
 				}
-			} else {
-
 			}
 		};
 
-		~BLBrowserRenderer() {
+		~BLCefRenderer() {
 			if (BL_glDeleteBuffersARB) {
 				BL_glDeleteBuffersARB(1, &*texBuffer);
 			} else {
@@ -139,7 +136,7 @@ class BLBrowserRenderer : public CefRenderHandler {
 			return true;
 		}
 
-		bool GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) {
+		bool GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
 			rect = CefRect(0, 0, width, height);
 			return true;
 		}
@@ -185,7 +182,7 @@ class BLBrowserRenderer : public CefRenderHandler {
 
 		void UpdateResolution(int hh, int ww) {
 			if (hh * ww * 4 > 16777215) {
-				Printf("That's too damn big.");
+				Printf("CEF resolution too high.");
 				return;
 			}
 		
@@ -198,18 +195,18 @@ class BLBrowserRenderer : public CefRenderHandler {
 
 	private:
 
-		IMPLEMENT_REFCOUNTING(BLBrowserRenderer);
+		IMPLEMENT_REFCOUNTING(BLCefRenderer);
 		int height, width;
 
 };
 
-CefRefPtr<BLBrowserRenderer> renderHandler;
+CefRefPtr<BLCefRenderer> renderHandler;
 
-class BLBrowserClient : public CefClient, public CefLifeSpanHandler, public CefLoadHandler {
+class BLCefClient : public CefClient, public CefLifeSpanHandler, public CefLoadHandler {
 
 	public:
 
-		BLBrowserClient(CefRefPtr<CefRenderHandler> ptr) : renderHandler(ptr) {
+		BLCefClient(CefRefPtr<CefRenderHandler> ptr) : renderHandler(ptr) {
 
 		}
 
@@ -230,7 +227,8 @@ class BLBrowserClient : public CefClient, public CefLifeSpanHandler, public CefL
 			// Must be executed on the UI thread.
 			//CEF_REQUIRE_UI_THREAD();
 
-			browser_id = browser->GetIdentifier();
+			if (browser_id == 0)
+				browser_id = browser->GetIdentifier();
 		}
 
 		bool DoClose(CefRefPtr<CefBrowser> browser) {
@@ -240,8 +238,7 @@ class BLBrowserClient : public CefClient, public CefLifeSpanHandler, public CefL
 			// Closing the main window requires special handling. See the DoClose()
 			// documentation in the CEF header for a detailed description of this
 			// process.
-			if (browser->GetIdentifier() == browser_id)
-			{
+			if (browser->GetIdentifier() == browser_id) {
 				// Set a flag to indicate that the window close should be allowed.
 				closing = true;
 			}
@@ -289,99 +286,206 @@ class BLBrowserClient : public CefClient, public CefLifeSpanHandler, public CefL
 
 	private:
 
-		int browser_id;
+		int browser_id = 0;
 		bool closing = false;
 		bool loaded = false;
 		CefRefPtr<CefRenderHandler> renderHandler;
 
-		IMPLEMENT_REFCOUNTING(BLBrowserClient);
+		IMPLEMENT_REFCOUNTING(BLCefClient);
 
 };
 
-bool bindTexID() {
+// Bind to the texture representing a CEF screen.
+bool bindTexID(const char* file) {
+	if (debug)
+		Printf("BT %s", file);
+
 	TextureObject* texture;
-	const char* string = "Add-Ons/Print_Screen_Cinema/prints/Cinema.png";
 	texID = 0;
 
 	for (texture = (TextureObject*)0x7868E0; texture; texture = texture->next) {
-		if (texture->texFileName != NULL && _stricmp(texture->texFileName, string) == 0) {
+		if (texture->texFileName != NULL && _stricmp(texture->texFileName, file) == 0) {
 			texID = texture->texGLName;
-			Printf("Found textureID: %u", texture->texGLName);
 			return true;
 		}
 	}
 
-	Printf("TextureID not found.");
-
 	return false;
 }
 
-bool ts_bindTexture(SimObject* this_, int argc, const char* argv[]) {
-	return bindTexID();
-}
-
+// Visit a URL.
 void ts_goToURL(SimObject* this_, int argc, const char* argv[]) {
-	if (BLBrowserInstance.get() != nullptr) {
-		BLBrowserInstance->GetMainFrame()->LoadURL(CefString(argv[1]));
+	if (debug)
+		Printf("URL %s", argv[1]);
+
+	if (BLCefInstance.get() != nullptr) {
+		BLCefInstance->GetMainFrame()->LoadURL(CefString(argv[1]));
 	} else {
-		Printf("BL Browser instance does not exist!");
+		Printf("CEF instance does not exist.");
 	}
 }
 
-void ts_resizeWindow(SimObject* this_, int argc, const char* argv[]) {
-	int width = atoi(argv[1]);
-	int height = atoi(argv[2]);
-
-	renderHandler->UpdateResolution(width, height);
-
-	BLBrowserInstance->GetHost()->WasResized();
+// Bind to the texture representing a CEF screen.
+bool ts_bindTexture(SimObject* this_, int argc, const char* argv[]) {
+	return bindTexID(textureFile);
 }
 
+// Set to a texture representing a CEF screen.
+void ts_setTexture(SimObject* this_, int argc, const char* argv[]) {
+	if (argv[1] != nullptr) {
+		char* tf = _strdup(textureFile);
+		textureFile = tf;
+	} else {
+		textureFile = "Add-Ons/Print_Screen_Cinema/prints/Cinema.png";
+	}
+
+	if (debug)
+		Printf("ST %s", textureFile);
+}
+
+// Resize the CEF window, reallocating the texture buffer.
+void ts_setResolution(SimObject* this_, int argc, const char* argv[]) {
+	if (debug)
+		Printf("SR h:%s w:%s", argv[1], argv[2]);
+
+	if (BLCefInstance.get() != nullptr) {
+		int width = atoi(argv[1]);
+		int height = atoi(argv[2]);
+
+		renderHandler->UpdateResolution(width, height);
+
+		BLCefInstance->GetHost()->WasResized();
+	} else {
+		Printf("CEF instance does not exist.");
+	}
+}
+
+// Execute a line of JavaScript.
+void ts_execJS(SimObject* this_, int argc, const char* argv[]) {
+	if (debug)
+		Printf("JS %s", argv[1]);
+
+	if (BLCefInstance.get() != nullptr) {
+		CefString js = CefString(argv[1]);
+
+		BLCefInstance->GetMainFrame()->ExecuteJavaScript(js, "", 0);
+	}
+	else {
+		Printf("CEF instance does not exist.");
+	}
+}
+
+// Move the mouse to a new position.
 void ts_mouseMove(SimObject* this_, int argc, const char* argv[]) {
-	CefMouseEvent* mouseEvent = new CefMouseEvent();
-	mouseEvent->x = atoi(argv[1]);
-	mouseEvent->y = atoi(argv[2]);
-	BLBrowserInstance->GetHost()->SendMouseMoveEvent(*mouseEvent, false);
+	if (debug)
+		Printf("MM x:%s y:%s", argv[1], argv[2]);
 
-	delete mouseEvent;
+	if (BLCefInstance.get() != nullptr) {
+		CefMouseEvent* mouseEvent = new CefMouseEvent();
+
+		mouseEvent->x = atoi(argv[1]);
+		mouseEvent->y = atoi(argv[2]);
+
+		BLCefInstance->GetHost()->SendMouseMoveEvent(*mouseEvent, false);
+
+		delete mouseEvent;
+	} else {
+		Printf("CEF instance does not exist.");
+	}
 }
 
+// Send a click event on the specified co-ordinates.
 void ts_mouseClick(SimObject* this_, int argc, const char* argv[]) {
-	CefMouseEvent* mouseEvent = new CefMouseEvent();
-	mouseEvent->x = atoi(argv[1]);
-	mouseEvent->y = atoi(argv[2]);
+	if (debug)
+		Printf("MC x:%s y:%s ct:%s", argv[1], argv[2], argv[3]);
+
+	if (BLCefInstance.get() != nullptr) {
+		CefMouseEvent* mouseEvent = new CefMouseEvent();
+
+		mouseEvent->x = atoi(argv[1]);
+		mouseEvent->y = atoi(argv[2]);
 	
-	int clickType = atoi(argv[3]);
-	BLBrowserInstance->GetHost()->SendMouseClickEvent(*mouseEvent, (cef_mouse_button_type_t)clickType, false, 1);
-	BLBrowserInstance->GetHost()->SendMouseClickEvent(*mouseEvent, (cef_mouse_button_type_t)clickType, true, 1);
+		int clickType = atoi(argv[3]);
+		BLCefInstance->GetHost()->SendMouseClickEvent(*mouseEvent, (cef_mouse_button_type_t)clickType, false, 1);
+		BLCefInstance->GetHost()->SendMouseClickEvent(*mouseEvent, (cef_mouse_button_type_t)clickType, true, 1);
 
-	delete mouseEvent;
+		delete mouseEvent;
+	} else {
+		Printf("CEF instance does not exist.");
+	}
 }
 
+// Send a mousewheel event at the specified co-ordinates.
 void ts_mouseWheel(SimObject* this_, int argc, const char* argv[]) {
-	CefMouseEvent* mouseEvent = new CefMouseEvent();
-	mouseEvent->x = atoi(argv[1]);
-	mouseEvent->y = atoi(argv[2]);
+	if (debug)
+		Printf("MW x:%s y:%s", argv[1], argv[2]);
 
-	int deltaX = atoi(argv[3]);
-	int deltaY = atoi(argv[4]);
-	BLBrowserInstance->GetHost()->SendMouseWheelEvent(*mouseEvent, deltaX, deltaY);
+	if (BLCefInstance.get() != nullptr) {
+		CefMouseEvent* mouseEvent = new CefMouseEvent();
 
-	delete mouseEvent;
+		mouseEvent->x = atoi(argv[1]);
+		mouseEvent->y = atoi(argv[2]);
+
+		int deltaX = atoi(argv[3]);
+		int deltaY = atoi(argv[4]);
+		BLCefInstance->GetHost()->SendMouseWheelEvent(*mouseEvent, deltaX, deltaY);
+
+		delete mouseEvent;
+	} else {
+		Printf("CEF instance does not exist.");
+	}
 }
 
+// Send a keyboard event.
 void ts_keyboardEvent(SimObject* this_, int argc, const char* argv[]) {
-	CefKeyEvent* keyEvent = new CefKeyEvent();
-	keyEvent->character = argv[1][0];
-	keyEvent->modifiers = atoi(argv[2]);
-	BLBrowserInstance->GetHost()->SendKeyEvent(*keyEvent);
+	if (debug)
+		Printf("KBE chr:%s mod:%s", argv[1][0], argv[2]);
 
-	delete keyEvent;
+	if (BLCefInstance.get() != nullptr) {
+		CefKeyEvent* keyEvent = new CefKeyEvent();
+
+		keyEvent->character = argv[1][0];
+		keyEvent->modifiers = atoi(argv[2]);
+		BLCefInstance->GetHost()->SendKeyEvent(*keyEvent);
+
+		delete keyEvent;
+	} else {
+		Printf("CEF instance does not exist.");
+	}
 }
 
-bool* cefRunning = new bool(true);
+// Turns debug mode on or off.
+void ts_debug(SimObject* this_, int argc, const char* argv[]) {
+	if (atoi(argv[1]) == 1) {
+		debug = true;
 
-DWORD WINAPI mainLoop(LPVOID lpParam) {
+		Printf("CEF debugging enabled.");
+	} else {
+		debug = false;
+
+		Printf("CEF debugging disabled.");
+	}
+}
+
+bool attach();
+bool detach();
+
+// Initialize Blockland CEF.
+bool ts_attach(SimObject* this_, int argc, const char* argv[]) {
+	return attach();
+}
+
+// De-initialize Blockland CEF.
+bool ts_detach(SimObject* this_, int argc, const char* argv[]) {
+	return detach();
+}
+
+static bool* isRunning = new bool(false);
+
+// Main CEF work loop.
+unsigned long __stdcall mainLoop(LPVOID lpParam) {
+	cefStopEvent = (HANDLE)lpParam;
+
 	CefMainArgs args;
 
 	CefSettings settings;
@@ -389,104 +493,196 @@ DWORD WINAPI mainLoop(LPVOID lpParam) {
 	settings.command_line_args_disabled = true;
 	settings.no_sandbox = true;
 	settings.windowless_rendering_enabled = true;
+	settings.persist_user_preferences = false;
 	settings.log_severity = cef_log_severity_t::LOGSEVERITY_WARNING;
+	//settings.remote_debugging_port = 9222;
 	//CefString(&settings.resources_dir_path).FromASCII("./CEF");
 	//CefString(&settings.locales_dir_path).FromASCII("./CEF/locales");
 	//CefString(&settings.log_file).FromASCII("./CEF/debug.log");
 	CefString(&settings.browser_subprocess_path).FromASCII("BlocklandCEFSubProcess.exe");
 	CefString(&settings.user_agent).FromASCII("Mozilla/5.0 (Windows NT 6.2; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.146 Safari/537.36 Blockland/r1997 (Torque Game Engine/1.3)");
+	CefString(&settings.cache_path).FromASCII("");
 
-	if (!CefInitialize(args, settings, new BLBrowser(), nullptr)) {
-		Printf("Failed to initialize CEF!");
+	if (!CefInitialize(args, settings, new BLCefApp(), nullptr)) {
+		Printf("Initialization of CEF failed.");
 		return false;
 	} else {
-		renderHandler = new BLBrowserRenderer(global_ww, global_hh);
+		renderHandler = new BLCefRenderer(global_ww, global_hh);
 		CefBrowserSettings browser_settings;
 		CefWindowInfo window_info;
-		CefRefPtr<BLBrowserClient> browserClient;
-		browserClient = new BLBrowserClient(renderHandler);
+		CefRefPtr<BLCefClient> browserClient;
+		browserClient = new BLCefClient(renderHandler);
 		browser_settings.background_color = CefColorSetARGB(255, 255, 255, 255);
 		browser_settings.windowless_frame_rate = 60;
+		browser_settings.javascript_access_clipboard = STATE_DISABLED;
+		browser_settings.local_storage = STATE_DISABLED;
+		browser_settings.file_access_from_file_urls = STATE_DISABLED;
+		browser_settings.universal_access_from_file_urls = STATE_DISABLED;
 		window_info.SetAsWindowless(0);
-		BLBrowserInstance = CefBrowserHost::CreateBrowserSync(window_info, browserClient.get(), "about:blank", browser_settings, NULL);
+		BLCefInstance = CefBrowserHost::CreateBrowserSync(window_info, browserClient.get(), "about:blank", browser_settings, NULL);
 
-		while (*cefRunning) {
+		Printf("Initialization of CEF complete, CEF is now running.");
+
+		*isRunning = true;
+
+		unsigned long cefSignal;
+
+		while (true) {
+			cefSignal = WaitForSingleObject(cefStopEvent, 0);
+
+			if (cefSignal == WAIT_OBJECT_0) {
+				Printf("CEF is shutting down...");
+				break;
+			}
+
 			CefDoMessageLoopWork();
 
 			Sleep(1);
 		}
 	}
 
-	BLBrowserInstance->GetHost()->CloseBrowser(true);
-	CefDoMessageLoopWork();
-	CefDoMessageLoopWork();
-	CefDoMessageLoopWork();
+	BLCefInstance->GetHost()->CloseBrowser(true);
 	CefShutdown();
 
-	return false;
+	Printf("CEF has shutdown.");
+
+	*isRunning = false;
+
+	return true;
 }
 
+static bool* hasInit = new bool(false);
+
+// Pre-initialize Blockland CEF.
 bool init() {
 	if (!torque_init())
 		return false;
 
-	ConsoleFunction(NULL, "CEF_bindTexture", ts_bindTexture, "() - Bind to the texture representing a CEF screen.", 1, 1);
-	ConsoleFunction(NULL, "CEF_goToURL", ts_goToURL, "(string url) - Visit a URL.", 2, 2);
-	ConsoleFunction(NULL, "CEF_resizeWindow", ts_resizeWindow, "(int width, int height) - Resize the CEF window, reallocating the texture buffer.", 3, 3);
+	if (*hasInit)
+		return false;
 
-	ConsoleFunction(NULL, "CEF_mouseMove", ts_mouseMove, "(int x, int y) - Move the mouse to this position.", 3, 3);
-	ConsoleFunction(NULL, "CEF_mouseClick", ts_mouseClick, "(int x, int y, int clickType) - Send a click event on the specified coordinates.", 4, 4);
-	ConsoleFunction(NULL, "CEF_mouseWheel", ts_mouseWheel, "(int x, int y, int deltaX, int deltaY) - Send a mousewheel event at the coords.", 5, 5);
-	ConsoleFunction(NULL, "CEF_keyboardEvent", ts_keyboardEvent, "(char key, int modifiers) - Send a keyboard event to CEF.", 3, 3);
+	Printf("Pre-initialization of CEF has started...");
 
-	ConsoleFunction(NULL, "clientCmdCEF_goToURL", ts_goToURL, "(string url) - Visit a URL.", 2, 2);
-	ConsoleFunction(NULL, "clientCmdCEF_mouseMove", ts_mouseMove, "(int x, int y) - Move the mouse to this position.", 3, 3);
-	ConsoleFunction(NULL, "clientCmdCEF_mouseClick", ts_mouseClick, "(int x, int y, int clickType) - Send a click event on the specified coordinates.", 4, 4);
-	ConsoleFunction(NULL, "clientCmdCEF_mouseWheel", ts_mouseWheel, "(int x, int y, int deltaX, int deltaY) - Send a mousewheel event at the coords.", 5, 5);
+	ConsoleFunction(0, "CEF_attach", ts_attach, "() - (Re-)initialize CEF.", 1, 1);
+	ConsoleFunction(0, "CEF_detach", ts_detach, "() - De-initialize CEF.", 1, 1);
+
+	ConsoleFunction(0, "CEF_debug", ts_debug, "(bool enabled) - Turn debugging on or off.", 2, 2);
+
+	ConsoleFunction(0, "CEF_goToURL", ts_goToURL, "(string url) - Visit a URL.", 2, 2);
+	ConsoleFunction(0, "CEF_setTexture", ts_setTexture, "(string file) - Set to a texture representing a CEF screen.", 1, 2);
+	ConsoleFunction(0, "CEF_bindTexture", ts_bindTexture, "() - Bind to the texture representing a CEF screen.", 1, 1);
+	ConsoleFunction(0, "CEF_setResolution", ts_setResolution, "(int width, int height) - Resize the CEF window, reallocating the texture buffer.", 3, 3);
+
+	ConsoleFunction(0, "CEF_execJS", ts_execJS, "(string text) - Execute a line of JavaScript.", 2, 2);
+
+	ConsoleFunction(0, "CEF_mouseMove", ts_mouseMove, "(int x, int y) - Move the mouse to a new position.", 3, 3);
+	ConsoleFunction(0, "CEF_mouseClick", ts_mouseClick, "(int x, int y, int clickType) - Send a click event on the specified co-ordinates.", 4, 4);
+	ConsoleFunction(0, "CEF_mouseWheel", ts_mouseWheel, "(int x, int y, int deltaX, int deltaY) - Send a mousewheel event at the specified co-ordinates.", 5, 5);
+	ConsoleFunction(0, "CEF_keyboardEvent", ts_keyboardEvent, "(char key, int modifiers) - Send a keyboard event.", 3, 3);
 
 	SetGlobalVariable("CEFHOOK::MIN", CEFHOOK_VERS_MIN);
 	SetGlobalVariable("CEFHOOK::MAJ", CEFHOOK_VERS_MAJ);
 	SetGlobalVariable("CEFHOOK::REV", CEFHOOK_VERS_REV);
 
-	Eval("package CEFPackage{function clientCmdMissionStartPhase3(%a0, %a1, %a2){Parent::clientCmdMissionStartPhase3(%a0, %a1, %a2);CEF_bindTexture();}function flushTextureCache(){Parent::flushTextureCache();schedule(500,0,CEF_bindTexture);}function disconnect(%r){CEF_goToURL(\"about:blank\");Parent::disconnect(%r);} function optionsDlg::applyGraphics(%this) { parent::applyGraphics(%this); schedule(500,ServerConnection,CEF_bindTexture); } }; activatePackage(\"CEFPackage\");");
 	Eval("function clientCmdCEF_Version(){commandToServer('CEF_Version', $CEFHOOK::MAJ, $CEFHOOK::MIN, $CEFHOOK::REV);}");
-	
+
+	Eval("function clientCmdCEF_goToURL(%a){CEF_goToURL(%a);}");
+	Eval("function clientCmdCEF_mouseMove(%a,%b){CEF_goToURL(%a,%b);}");
+	Eval("function clientCmdCEF_mouseClick(%a,%b,%c){CEF_mouseClick(%a,%b,%c);}");
+	Eval("function clientCmdCEF_mouseWheel(%a,%b,%c,%d){CEF_goToURL(%a,%b,%c,%d);}");
+
+	const char* cefPackage =
+		"package CEFPackage {"
+		"function clientCmdMissionStartPhase3(%a,%b,%c) {"
+		"Parent::clientCmdMissionStartPhase3(%a,%b,%c);CEF_bindTexture();"
+		"}"
+		"function connectToServer(%a,%b,%c,%d) {"
+		"CEF_goToURL(\"about:blank\");Parent::connectToServer(%a,%b,%c,%d);"
+		"}"
+		"function disconnect(%a) {"
+		"CEF_goToURL(\"about:blank\");Parent::disconnect(%a);"
+		"}"
+		"function onExit() {"
+		"CEF_detach();Parent::onExit();"
+		"}"
+		"function optionsDlg::applyGraphics(%a) {"
+		"parent::applyGraphics(%a);schedule(500,ServerConnection,CEF_bindTexture);"
+		"}"
+		"};";
+
+	Eval(cefPackage);
+
 	initGL();
+
+	*hasInit = true;
+
+	Printf("Pre-initialization of CEF complete.");
+
+	Eval("activatePackage(\"CEFPackage\");");
+
+	return attach();
+}
+
+// Initialize Blockland CEF.
+bool attach() {
+	if (*isRunning)
+		return false;
+
+	if (!torque_init())
+		return false;
+
+	if (!*hasInit)
+		return init();
+
+	Printf("Initialization of CEF has started...");
+
 	swapBuffers_detour = new MologieDetours::Detour<swapBuffersFn>((swapBuffersFn)0x4237D0, (swapBuffersFn)swapBuffers_hook);
 
-	blockland = GetCurrentThread();
-	event = CreateEvent(NULL, TRUE, FALSE, "blcefevent");
-	thread = CreateThread(NULL, 0, mainLoop, 0, 0, NULL);
+	cefStopEvent = CreateEvent(0, true, false, 0);
+	cefThread = CreateThread(0, 0, mainLoop, (LPVOID)cefStopEvent, 0, 0);
 
 	return true;
 }
 
-bool deinit() {
-	if (*cefRunning) {
-		*cefRunning = false;
+// De-initialize Blockland CEF.
+bool detach() {
+	if (!*isRunning)
+		return false;
 
-		WaitForSingleObject(event, 1000);
-		TerminateThread(thread, 0);
-		CloseHandle(thread);
-		CloseHandle(event);
-	}
+	Printf("De-initialization of CEF in progress...");
 
-	if (swapBuffers_detour != NULL)
+	SetEvent(cefStopEvent);
+
+	WaitForSingleObject(cefThread, INFINITE);
+
+	ResetEvent(cefStopEvent);
+
+	CloseHandle(cefThread);
+	CloseHandle(cefStopEvent);
+
+	if (swapBuffers_detour != nullptr) {
 		delete swapBuffers_detour;
+		swapBuffers_detour = nullptr;
+	}
 
 	free(texBuffer);
 
-	delete cefRunning;
+	debug = false;
+
+	Printf("De-initialization of CEF complete, CEF is no longer running.");
 
 	return true;
 }
 
-int WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+// Entry point for Blockland Loader.
+int __stdcall DllMain(HINSTANCE instance, unsigned long reason, void* reserved) {
 	switch (reason) {
 		case DLL_PROCESS_ATTACH:
-			return init();
+			return attach();
 		case DLL_PROCESS_DETACH:
-			return deinit();
+			// Unable to detach Blockland CEF without crashing the game and/or leaving subprocesses open on exit due to a lack of functionality from Blockland Loader.
+			// DLL detaching is therefore handled by Blockland's onExit() function in the "CEFPackage" package.
+			return true;
 		default:
 			return true;
 	}
