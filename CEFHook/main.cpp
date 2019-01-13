@@ -25,7 +25,7 @@
 
 #define CEFHOOK_VERS_MAJ "0"
 #define CEFHOOK_VERS_MIN "1"
-#define CEFHOOK_VERS_REV "0"
+#define CEFHOOK_VERS_REV "1"
 
 struct TextureObject {
 	TextureObject *next;
@@ -51,7 +51,9 @@ struct TextureObject {
 CefRefPtr<CefBrowser> BLCefInstance;
 
 typedef int(*swapBuffersFn)();
-static int texID = 0; // Texture ID that we bind to with OpenGL.
+typedef cef_paint_element_type_t PaintElementType;
+
+static int textureID = 0; // Texture ID that we bind to with OpenGL.
 static char* textureFile = "Add-Ons/Print_Screen_Cinema/prints/Cinema.png"; // Default texture file to look for when binding.
 
 static bool debug = false; // Is debug mode enabled?
@@ -59,7 +61,6 @@ static bool dirty = false; // Do we need to render the texture?
 
 static int global_ww = 1024; // Width.
 static int global_hh = 768; // Height, both are used in swapBuffers to determine what should be copied over.
-
 
 MologieDetours::Detour<swapBuffersFn>* swapBuffers_detour;
 GLuint* texBuffer;
@@ -69,8 +70,8 @@ HANDLE cefStopEvent;
 
 // The detour so we can draw our stuff before Torque can.
 int __fastcall swapBuffers_hook() {
-	if (texID != 0 && dirty) {
-		BL_glBindTexture(GL_TEXTURE_2D, texID);
+	if (textureID != 0 && dirty) {
+		BL_glBindTexture(GL_TEXTURE_2D, textureID);
 		BL_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, global_ww, global_hh, GL_BGRA_EXT, GL_UNSIGNED_BYTE, texBuffer);
 
 		BL_glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
@@ -156,7 +157,7 @@ class BLCefRenderer : public CefRenderHandler {
 		}
 
 		void OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type, const CefRenderHandler::RectList& dirtyRects, const void* buffer, int w, int h) {
-			if (texID != 0) {
+			if (textureID != 0) {
 				if (BL_glBindBufferARB) {
 					BL_glBindBufferARB(GL_TEXTURE_BUFFER, *texBuffer);
 					BL_glBufferDataARB(GL_TEXTURE_BUFFER, width * height * 4, buffer, GL_DYNAMIC_DRAW);
@@ -296,19 +297,27 @@ class BLCefClient : public CefClient, public CefLifeSpanHandler, public CefLoadH
 };
 
 // Bind to the texture representing a CEF screen.
-bool bindTexID(const char* file) {
-	if (debug)
-		Printf("BT %s", file);
-
+bool bindTextureID(const char* file) {
 	TextureObject* texture;
-	texID = 0;
+	textureID = 0;
 
 	for (texture = (TextureObject*)0x7868E0; texture; texture = texture->next) {
-		if (texture->texFileName != NULL && _stricmp(texture->texFileName, file) == 0) {
-			texID = texture->texGLName;
+		if (texture->texFileName != 0 && _stricmp(texture->texFileName, file) == 0) {
+			textureID = texture->texGLName;
+
+			BLCefInstance->GetHost()->Invalidate(PaintElementType::PET_VIEW);
+
+			dirty = true;
+
+			if (debug)
+				Printf("BT succ %s", file);
+
 			return true;
 		}
 	}
+
+	if (debug)
+		Printf("BT fail %s", file);
 
 	return false;
 }
@@ -327,7 +336,7 @@ void ts_goToURL(SimObject* this_, int argc, const char* argv[]) {
 
 // Bind to the texture representing a CEF screen.
 bool ts_bindTexture(SimObject* this_, int argc, const char* argv[]) {
-	return bindTexID(textureFile);
+	return bindTextureID(textureFile);
 }
 
 // Set to a texture representing a CEF screen.
@@ -341,6 +350,11 @@ void ts_setTexture(SimObject* this_, int argc, const char* argv[]) {
 
 	if (debug)
 		Printf("ST %s", textureFile);
+}
+
+// Get the texture currently representing a CEF screen.
+const char* ts_getTexture(SimObject* this_, int argc, const char* argv[]) {
+	return textureFile;
 }
 
 // Resize the CEF window, reallocating the texture buffer.
@@ -515,7 +529,7 @@ unsigned long __stdcall mainLoop(LPVOID lpParam) {
 		browser_settings.background_color = CefColorSetARGB(255, 255, 255, 255);
 		browser_settings.windowless_frame_rate = 60;
 		browser_settings.javascript_access_clipboard = STATE_DISABLED;
-		browser_settings.local_storage = STATE_DISABLED;
+		//browser_settings.local_storage = STATE_DISABLED;
 		browser_settings.file_access_from_file_urls = STATE_DISABLED;
 		browser_settings.universal_access_from_file_urls = STATE_DISABLED;
 		window_info.SetAsWindowless(0);
@@ -570,6 +584,7 @@ bool init() {
 
 	ConsoleFunction(0, "CEF_goToURL", ts_goToURL, "(string url) - Visit a URL.", 2, 2);
 	ConsoleFunction(0, "CEF_setTexture", ts_setTexture, "(string file) - Set to a texture representing a CEF screen.", 1, 2);
+	ConsoleFunction(0, "CEF_getTexture", ts_getTexture, "() - Get the texture currently representing a CEF screen.", 1, 1);
 	ConsoleFunction(0, "CEF_bindTexture", ts_bindTexture, "() - Bind to the texture representing a CEF screen.", 1, 1);
 	ConsoleFunction(0, "CEF_setResolution", ts_setResolution, "(int width, int height) - Resize the CEF window, reallocating the texture buffer.", 3, 3);
 
@@ -601,6 +616,9 @@ bool init() {
 		"}"
 		"function disconnect(%a) {"
 		"CEF_goToURL(\"about:blank\");Parent::disconnect(%a);"
+		"}"
+		"function disconnectedCleanup() {"
+		"CEF_goToURL(\"about:blank\");Parent::disconnectedCleanup();"
 		"}"
 		"function onExit() {"
 		"CEF_detach();Parent::onExit();"
