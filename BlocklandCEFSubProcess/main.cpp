@@ -53,7 +53,6 @@ class SubApp : public BLCefApp, public CefRenderProcessHandler {
 };
 
 int CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nCmdShow) {
-	//cef_log(0, 0, 0, "proc start");
 	CefMainArgs args(hInstance);
 	return CefExecuteProcess(args, new SubApp(), nullptr);
 }

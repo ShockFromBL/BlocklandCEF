@@ -25,7 +25,7 @@
 
 #define CEFHOOK_VERS_MAJ "0"
 #define CEFHOOK_VERS_MIN "1"
-#define CEFHOOK_VERS_REV "1"
+#define CEFHOOK_VERS_REV "2"
 
 struct TextureObject {
 	TextureObject *next;
@@ -602,9 +602,9 @@ bool init() {
 	Eval("function clientCmdCEF_Version(){commandToServer('CEF_Version', $CEFHOOK::MAJ, $CEFHOOK::MIN, $CEFHOOK::REV);}");
 
 	Eval("function clientCmdCEF_goToURL(%a){CEF_goToURL(%a);}");
-	Eval("function clientCmdCEF_mouseMove(%a,%b){CEF_goToURL(%a,%b);}");
+	Eval("function clientCmdCEF_mouseMove(%a,%b){CEF_mouseMove(%a,%b);}");
 	Eval("function clientCmdCEF_mouseClick(%a,%b,%c){CEF_mouseClick(%a,%b,%c);}");
-	Eval("function clientCmdCEF_mouseWheel(%a,%b,%c,%d){CEF_goToURL(%a,%b,%c,%d);}");
+	Eval("function clientCmdCEF_mouseWheel(%a,%b,%c,%d){CEF_mouseWheel(%a,%b,%c,%d);}");
 
 	const char* cefPackage =
 		"package CEFPackage {"
@@ -617,8 +617,8 @@ bool init() {
 		"function disconnect(%a) {"
 		"CEF_goToURL(\"about:blank\");Parent::disconnect(%a);"
 		"}"
-		"function disconnectedCleanup() {"
-		"CEF_goToURL(\"about:blank\");Parent::disconnectedCleanup();"
+		"function disconnectedCleanup(%a) {"
+		"CEF_goToURL(\"about:blank\");Parent::disconnectedCleanup(%a);"
 		"}"
 		"function onExit() {"
 		"CEF_detach();Parent::onExit();"
